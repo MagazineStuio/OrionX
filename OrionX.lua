@@ -48,79 +48,81 @@ local function safe_pcall(f, ...)
 	return res
 end
 
--- ======== Pure Lua SHA-256 (for BuildInfo and runtime self-checks) ========
--- Compact SHA-256 implementation (public domain / CC0 inspired)
-local function rshift(x,n) return math.floor(x/2^n) end
-local function band(a,b) return a & b end
-local function bor(a,b) return a | b end
-local function bxor(a,b) return a ~ b end
-local function bnot(a) return ~a end
-local function rrotate(x,n) n=n%32; return rshift(x,n) | ((x << (32-n)) & 0xFFFFFFFF) end
+-- ======== Pure Lua SHA-256 (Luau/Studio-safe, no early return) ========
+local bit = bit32
+local band, bor, bxor, bnot = bit.band, bit.bor, bit.bxor, bit.bnot
+local rshift, lshift = bit.rshift, bit.lshift
+local function mod32(x) return band(x, 0xFFFFFFFF) end
+local function rrotate(x,n) n = n % 32; return bor(rshift(x,n), lshift(x, 32-n)) end
+
+local function to_bytes(s)
+	local n = #s
+	local t = table.create and table.create(n) or {}
+	for i=1,n do t[i]=string.byte(s,i) end
+	return t
+end
+
+local function u32(a,b,c,d)
+	return bor(lshift(a,24), bor(lshift(b,16), bor(lshift(c,8), d)))
+end
+
+local K = {
+	0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+	0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+	0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+	0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+	0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+	0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+	0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+}
 
 local function sha256(msg)
 	local H = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}
-	local K = {
-		0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-		0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-		0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-		0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-		0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-		0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-		0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-		0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-	}
-	local function to_bytes(s)
-		local bytes = table.create(#s)
-		for i=1,#s do bytes[i]=string.byte(s,i) end
-		return bytes
-	end
-	local function u32(a,b,c,d)
-		return ((a<<24) | (b<<16) | (c<<8) | d) & 0xFFFFFFFF
-	end
+
 	local bytes = to_bytes(msg)
 	local bitlen = #bytes * 8
 	table.insert(bytes, 0x80)
 	while (#bytes % 64) ~= 56 do table.insert(bytes, 0) end
 	local len = bitlen
 	local lenBytes = {}
-	for i=1,8 do lenBytes[9-i] = len & 0xFF; len = rshift(len,8) end
+	for i=1,8 do lenBytes[9-i] = band(len,0xFF); len = math.floor(len/256) end
 	for i=1,8 do table.insert(bytes, lenBytes[i]) end
 
 	for i=1,#bytes,64 do
-		local w = table.create(64,0)
+		local w = table.create and table.create(64,0) or {}
 		for j=0,15 do
 			local b1=bytes[i + j*4]; local b2=bytes[i + j*4 + 1]; local b3=bytes[i + j*4 + 2]; local b4=bytes[i + j*4 + 3]
 			w[j+1] = u32(b1,b2,b3,b4)
 		end
 		for j=17,64 do
-			local v = w[j-15]
-			local s0 = bxor(bxor(rrotate(v,7), rrotate(v,18)), rshift(v,3))
-			v = w[j-2]
-			local s1 = bxor(bxor(rrotate(v,17), rrotate(v,19)), rshift(v,10))
-			w[j] = (w[j-16] + s0 + w[j-7] + s1) & 0xFFFFFFFF
+			local v1 = w[j-15]
+			local s0 = bxor(bxor(rrotate(v1,7), rrotate(v1,18)), rshift(v1,3))
+			local v2 = w[j-2]
+			local s1 = bxor(bxor(rrotate(v2,17), rrotate(v2,19)), rshift(v2,10))
+			w[j] = mod32(w[j-16] + s0 + w[j-7] + s1)
 		end
-		local a,b,c,d,e,f,g,h = table.unpack(H)
+		local a,b,c,d,e,f,g,h = H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8]
 		for j=1,64 do
 			local S1 = bxor(bxor(rrotate(e,6), rrotate(e,11)), rrotate(e,25))
 			local ch = bxor(band(e,f), band(bnot(e),g))
-			local temp1 = (h + S1 + ch + K[1][j] + w[j]) & 0xFFFFFFFF
+			local temp1 = mod32(h + S1 + ch + K[j] + w[j])
 			local S0 = bxor(bxor(rrotate(a,2), rrotate(a,13)), rrotate(a,22))
 			local maj = bxor(bxor(band(a,b), band(a,c)), band(b,c))
-			local temp2 = (S0 + maj) & 0xFFFFFFFF
+			local temp2 = mod32(S0 + maj)
 			h = g; g = f; f = e
-			d = (d + temp1) & 0xFFFFFFFF
-			e = d
-			c = b; b = a
-			a = (temp1 + temp2) & 0xFFFFFFFF
+			e = mod32(d + temp1)
+			d = c; c = b; b = a
+			a = mod32(temp1 + temp2)
 		end
-		H[1] = (H[1] + a) & 0xFFFFFFFF
-		H[2] = (H[2] + b) & 0xFFFFFFFF
-		H[3] = (H[3] + c) & 0xFFFFFFFF
-		H[4] = (H[4] + d) & 0xFFFFFFFF
-		H[5] = (H[5] + e) & 0xFFFFFFFF
-		H[6] = (H[6] + f) & 0xFFFFFFFF
-		H[7] = (H[7] + g) & 0xFFFFFFFF
-		H[8] = (H[8] + h) & 0xFFFFFFFF
+		H[1] = mod32(H[1] + a)
+		H[2] = mod32(H[2] + b)
+		H[3] = mod32(H[3] + c)
+		H[4] = mod32(H[4] + d)
+		H[5] = mod32(H[5] + e)
+		H[6] = mod32(H[6] + f)
+		H[7] = mod32(H[7] + g)
+		H[8] = mod32(H[8] + h)
 	end
 	return string.format("%08x%08x%08x%08x%08x%08x%08x%08x", H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8])
 end
@@ -447,20 +449,48 @@ local function registerControl(win, id, obj)
 end
 local function getControl(win, id) return win._state.idMap[id] end
 
--- Virtualized list pool for dropdown items
+-- Virtualized item pool (Studio-safe)
 local function newItemPool(createFn)
-	local pool = {free={}, used={}
-		function pool:acquire()
-			local item = table.remove(self.free) or createFn()
-			table.insert(self.used, item)
-			return item
+	assert(type(createFn)=="function","newItemPool requires a factory function")
+
+	local pool = { free = {}, used = {} }  -- << ปิดตารางให้ครบ >>
+
+	function pool:acquire()
+		local item = self.free[#self.free]
+		if item ~= nil then
+			self.free[#self.free] = nil
+		else
+			item = createFn()
 		end
-		function pool:releaseAll()
-			for _,it in ipairs(self.used) do it.Visible=false; table.insert(self.free, it) end
-			table.clear(self.used)
+		self.used[#self.used+1] = item
+		return item
+	end
+
+	function pool:releaseAll()
+		for i = #self.used, 1, -1 do
+			local it = self.used[i]
+			if it then
+				if it.Visible ~= nil then it.Visible = false end
+				self.used[i] = nil
+				self.free[#self.free+1] = it
+			end
 		end
-		return pool
+	end
+
+	function pool:clear()
+		for i = #self.free, 1, -1 do
+			local it = self.free[i]; self.free[i] = nil
+			if it and it.Destroy then it:Destroy() end
+		end
+		for i = #self.used, 1, -1 do
+			local it = self.used[i]; self.used[i] = nil
+			if it and it.Destroy then it:Destroy() end
+		end
+	end
+
+	return pool
 end
+
 
 -- Common validation helpers
 local function expectType(name, val, typ, optional)
