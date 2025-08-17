@@ -9,6 +9,7 @@ local Players = Services.Players
 local RunService = Services.RunService
 local UserInputService = Services.UserInputService
 local TweenService = Services.TweenService
+local Lighting = Services.Lighting
 
 local Anim = {}
 Anim.info = {
@@ -547,6 +548,122 @@ local Window = {}; Window.__index=Window
 local Tab = {}; Tab.__index=Tab
 local Section = {}; Section.__index=Section
 
+local function _t(o, ti, g)
+	local tw = TweenService:Create(o, ti, g); tw:Play(); return tw
+end
+
+local MOTION = {
+	inDur = 0.22, outDur = 0.18,
+	inEase = Enum.EasingStyle.Quad, outEase = Enum.EasingStyle.Quad,
+	blur = 12,
+	dim  = 0.35, 
+	pop  = 0.96, 
+	shiftY = 8, 
+}
+
+
+local function AttachWindowMotion(main: GuiObject, screenGui: ScreenGui, opts)
+	opts = opts or {}
+	for k,v in pairs(MOTION) do if opts[k]==nil then opts[k]=v end end
+
+	main.ClipsDescendants = false
+	if main.AnchorPoint ~= Vector2.new(0.5,0.5) then
+		main.AnchorPoint = Vector2.new(0.5,0.5)
+	end
+
+	-- Dim backdrop
+	local dim = Instance.new("Frame")
+	dim.Name = "Backdrop"
+	dim.BackgroundColor3 = Color3.new(0,0,0)
+	dim.BackgroundTransparency = 1
+	dim.BorderSizePixel = 0
+	dim.Size = UDim2.fromScale(1,1)
+	dim.ZIndex = (main.ZIndex or 1) - 1
+	dim.Visible = false
+	dim.Parent = screenGui
+
+	local blur: BlurEffect? = nil
+	if opts.blur > 0 then
+		local Lighting = game:GetService("Lighting")
+		blur = Instance.new("BlurEffect")
+		blur.Size = 0
+		blur.Enabled = false
+		blur.Name = "OrionXBlur"
+		blur.Parent = Lighting
+	end
+
+	-- Scale without reflow
+	local scale = Instance.new("UIScale")
+	scale.Scale = 1
+	scale.Parent = main
+
+	-- เก็บตำแหน่งจริงไว้
+	local basePos = main.Position
+
+	-- state
+	local playing = {inAnims={}, outAnims={}}
+	local function stop(list)
+		for _,tw in ipairs(list) do pcall(function() tw:Cancel() end) end
+		table.clear(list)
+	end
+
+	local api = {}
+
+	function api:Show()
+		stop(playing.outAnims)
+		dim.Visible = opts.dim > 0
+		if blur then blur.Enabled = true end
+		main.Visible = true
+
+		-- เริ่มจากเล็ก+จาง+เลื่อนลง
+		scale.Scale = opts.pop
+		main.Position = UDim2.new(basePos.X.Scale, basePos.X.Offset, basePos.Y.Scale, basePos.Y.Offset + opts.shiftY)
+		dim.BackgroundTransparency = 1
+		if blur then blur.Size = 0 end
+
+		playing.inAnims = {
+			_t(scale, TweenInfo.new(opts.inDur, opts.inEase, Enum.EasingDirection.Out), {Scale = 1}),
+			_t(main,  TweenInfo.new(opts.inDur, opts.inEase, Enum.EasingDirection.Out),
+				{Position = basePos}),
+			opts.dim>0 and _t(dim, TweenInfo.new(opts.inDur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+				{BackgroundTransparency = 1 - opts.dim}) or nil,
+			(blur and _t(blur, TweenInfo.new(opts.inDur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+				{Size = opts.blur})) or nil,
+		}
+		return true
+	end
+
+	function api:Hide()
+		stop(playing.inAnims)
+		playing.outAnims = {
+			_t(scale, TweenInfo.new(opts.outDur, opts.outEase, Enum.EasingDirection.In), {Scale = opts.pop}),
+			_t(main,  TweenInfo.new(opts.outDur, opts.outEase, Enum.EasingDirection.In),
+				{Position = UDim2.new(basePos.X.Scale, basePos.X.Offset, basePos.Y.Scale, basePos.Y.Offset + opts.shiftY)}),
+			opts.dim>0 and _t(dim, TweenInfo.new(opts.outDur, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{BackgroundTransparency = 1}) or nil,
+			(blur and _t(blur, TweenInfo.new(opts.outDur, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{Size = 0})) or nil,
+		}
+		-- ปิดเมื่อจบ
+		task.delay(opts.outDur, function()
+			dim.Visible = false
+			if blur then blur.Enabled = false end
+			main.Visible = false
+			main.Position = basePos
+		end)
+		return true
+	end
+
+	function api:Destroy()
+		stop(playing.inAnims); stop(playing.outAnims)
+		if dim then dim:Destroy() end
+		if blur then blur:Destroy() end
+		if scale then scale:Destroy() end
+	end
+
+	return api
+end
+
 function OrionX.MakeWindow(opts)
 	opts = opts or {}
 	expectType("opts", opts, "table", true)
@@ -566,7 +683,20 @@ function OrionX.MakeWindow(opts)
 		Size=UDim2.new(0,560,0,420), Position=UDim2.new(0.5,-280,0.5,-210)
 	}
 	uiCorner(main, 10); uiStroke(main, theme.StrokeStrong, 1)
+	
+	local motion = AttachWindowMotion(main, sg, {
+		inDur=0.22, outDur=0.16, pop=0.96, shiftY=8, dim=0.35, blur=12
+	})
 
+	motion:Show()
+
+	UserInputService.InputBegan:Connect(function(inp, gpe)
+		if gpe then return end
+		if inp.KeyCode == rt.toggleKey then
+			if main.Visible then motion:Hide() else motion:Show() end
+		end
+	end)
+	
 	local titleBar = createFrame{
 		Parent=main, Name="TitleBar", Color=theme.Foreground,
 		Size=UDim2.new(1,0,0,36)
@@ -585,6 +715,8 @@ function OrionX.MakeWindow(opts)
 	closeBtn.Size=UDim2.new(0,32,0,24); closeBtn.Position=UDim2.new(1,-40,0,6)
 	closeBtn.Parent=titleBar
 	uiCorner(closeBtn,6); uiStroke(closeBtn, theme.Stroke, 1)
+	
+	closeBtn.MouseButton1Click:Connect(function() motion:Hide() end)
 	
 	local leftTabs = createFrame{
 		Parent=main, Name="Tabs", Color=theme.Foreground,
@@ -969,7 +1101,6 @@ function OrionX.MakeWindow(opts)
 	table.insert(rt.windows, win)
 	return win
 end
-
 
 -- ======== Section controls ========
 function Section:_addBaseRow(height)
