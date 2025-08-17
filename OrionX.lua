@@ -10,28 +10,58 @@ local RunService = Services.RunService
 local UserInputService = Services.UserInputService
 local TweenService = Services.TweenService
 
+local Anim = {}
+Anim.info = {
+	fast  = TweenInfo.new(0.12, Enum.EasingStyle.Quad,  Enum.EasingDirection.Out),
+	base  = TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+	slow  = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+}
+function Anim.tween(o, props, info)
+	local tw = TweenService:Create(o, info or Anim.info.base, props); tw:Play(); return tw
+end
+local function ensureUIScale(gui)
+	local s = gui:FindFirstChildOfClass("UIScale"); if not s then s = Instance.new("UIScale", gui) end; return s
+end
+local function pressPulse(gui) -- scale press feedback
+	local s = ensureUIScale(gui); s.Scale = 1
+	Anim.tween(s, {Scale = 0.96}, Anim.info.fast)
+	task.delay(0.08, function() if s then Anim.tween(s, {Scale = 1}, Anim.info.fast) end end)
+end
+local function hoverColor(gui, from, to) -- hover blend
+	gui.BackgroundColor3 = from; return function(enter)
+		Anim.tween(gui, {BackgroundColor3 = enter and to or from}, Anim.info.fast)
+	end
+end
+local function fadeIn(gui) gui.BackgroundTransparency=1; Anim.tween(gui,{BackgroundTransparency=0},Anim.info.base) end
+local function fadeOutAndDestroy(gui)
+	Anim.tween(gui,{BackgroundTransparency=1},Anim.info.base).Completed:Connect(function() if gui then gui:Destroy() end end)
+end
+
 local function typeofx(v) -- robust typeof fallback
 	local ok, tv = pcall(function() return typeof(v) end)
 	return ok and tv or type(v)
 end
 
+local function cloneTable(t)
+	if type(t) ~= "table" then return t end
+	local r = {}
+	for k, v in next, t do
+		r[k] = (type(v) == "table") and cloneTable(v) or v
+	end
+	return r
+end
+
 local function deepMerge(dst, src)
-	for k,v in pairs(src) do
-		if type(v)=="table" and type(dst[k])=="table" then
-			deepMerge(dst[k], v)
+	if type(dst) ~= "table" then dst = {} end
+	if type(src) ~= "table" then return dst end
+	for k, v in next, src do
+		if type(v) == "table" then
+			dst[k] = deepMerge(type(dst[k]) == "table" and dst[k] or {}, v)
 		else
-			dst[k]=v
+			dst[k] = v
 		end
 	end
 	return dst
-end
-
-local function cloneTable(t)
-	local r = {}
-	for k,v in pairs(t) do
-		if type(v)=="table" then r[k]=cloneTable(v) else r[k]=v end
-	end
-	return r
 end
 
 local function roundToStep(x, step)
@@ -269,13 +299,25 @@ local DefaultTheme = {
 }
 
 local function validateTheme(t)
-	for k, typ in pairs(ThemeSchema[1]) do
-		if t[k] ~= nil then
-			if typ=="Color3" and typeofx(t[k])~="Color3" then
-				error("Theme key "..k.." must be Color3")
+	assert(type(t)=="table", "theme must be table")
+	for k, typ in next, ThemeSchema do
+		local v = t[k]
+		if v ~= nil then
+			if typ == "Color3" then
+				assert(typeofx(v)=="Color3", ("Theme key %s must be Color3"):format(k))
 			end
 		end
 	end
+end
+
+local function resolveTheme(t)
+	if type(t) ~= "table" then t = {} end
+	for k, dv in next, DefaultTheme do
+		if typeof(dv)=="Color3" and typeof(t[k])~="Color3" then
+			t[k] = dv
+		end
+	end
+	return t
 end
 
 -- ======== Input Adapter Strategy ========
@@ -370,6 +412,8 @@ UI.__index = UI
 
 local function createFrame(props)
 	local f = Instance.new("Frame")
+	local bg = props.Color or (DefaultTheme and DefaultTheme.Background) or Color3.fromRGB(18,18,20)
+	f.BackgroundColor3 = bg
 	f.BackgroundColor3 = props.Color or Color3.fromRGB(255,0,0)
 	f.BorderSizePixel = 0
 	f.Size = props.Size or UDim2.new(0,100,0,100)
@@ -506,48 +550,248 @@ local Section = {}; Section.__index=Section
 function OrionX.MakeWindow(opts)
 	opts = opts or {}
 	expectType("opts", opts, "table", true)
+
+	local UserInputService = game:GetService("UserInputService")
+	local RunService = game:GetService("RunService")
+	
 	local rt = Core:GetRuntime()
+	rt.theme = resolveTheme(rt.theme)
+	local theme = rt.theme
+
 	local sg = ensureScreenGui(rt)
 	startRenderLoop(rt)
 
-	local theme = rt.theme
-	-- Root window
-	local main = createFrame{Parent=sg, Name="Window", Color=theme.Background, Size=UDim2.new(0, 560, 0, 420), Position=UDim2.new(0.5,-280,0.5,-210)}
+	local main = createFrame{
+		Parent=sg, Name="Window", Color=theme.Background,
+		Size=UDim2.new(0,560,0,420), Position=UDim2.new(0.5,-280,0.5,-210)
+	}
 	uiCorner(main, 10); uiStroke(main, theme.StrokeStrong, 1)
-	local titleBar = createFrame{Parent=main, Name="TitleBar", Color=theme.Foreground, Size=UDim2.new(1,0,0,36)}
+
+	local titleBar = createFrame{
+		Parent=main, Name="TitleBar", Color=theme.Foreground,
+		Size=UDim2.new(1,0,0,36)
+	}
 	uiCorner(titleBar, 10); uiStroke(titleBar, theme.Stroke, 1)
-	local title = createText{Parent=titleBar, Text=opts.Name or "OrionX", TextSize=16, Color=theme.Text, Size=UDim2.new(1,-80,1,-0), Position=UDim2.new(0,12,0,0)}
-	local closeBtn = Instance.new("TextButton"); closeBtn.Text="✕"; closeBtn.Font=Enum.Font.GothamBold; closeBtn.TextSize=16; closeBtn.AutoButtonColor=false
-	closeBtn.BackgroundColor3=theme.Button; closeBtn.TextColor3=theme.Text; closeBtn.Size=UDim2.new(0,32,0,24); closeBtn.Position=UDim2.new(1,-40,0,6); closeBtn.Parent=titleBar
+
+	local title = createText{
+		Parent=titleBar, Text=opts.Name or "OrionX", TextSize=16, Color=theme.Text,
+		Size=UDim2.new(1,-80,1,0), Position=UDim2.new(0,12,0,0)
+	}
+
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Name="Close"; closeBtn.Text="X"; closeBtn.Font=Enum.Font.GothamBold
+	closeBtn.TextSize=16; closeBtn.AutoButtonColor=false
+	closeBtn.BackgroundColor3=theme.Button; closeBtn.TextColor3=theme.Text
+	closeBtn.Size=UDim2.new(0,32,0,24); closeBtn.Position=UDim2.new(1,-40,0,6)
+	closeBtn.Parent=titleBar
 	uiCorner(closeBtn,6); uiStroke(closeBtn, theme.Stroke, 1)
+	
+	local leftTabs = createFrame{
+		Parent=main, Name="Tabs", Color=theme.Foreground,
+		Size=UDim2.new(0,160,1,-36), Position=UDim2.new(0,0,0,36)
+	}
+	uiStroke(leftTabs, theme.Stroke,1); uiPadding(leftTabs,8)
+	local tabsList = uiList(leftTabs,6)
 
-	local leftTabs = createFrame{Parent=main, Name="Tabs", Color=theme.Foreground, Size=UDim2.new(0,160,1,-36), Position=UDim2.new(0,0,0,36)}
-	uiStroke(leftTabs, theme.Stroke,1); uiPadding(leftTabs,8); local tabsList = uiList(leftTabs,6)
-
-	local rightHolder = createFrame{Parent=main, Name="Holder", Color=theme.Background, Size=UDim2.new(1,-160,1,-36), Position=UDim2.new(0,160,0,36)}
+	local rightHolder = createFrame{
+		Parent=main, Name="Holder", Color=theme.Background,
+		Size=UDim2.new(1,-160,1,-36), Position=UDim2.new(0,160,0,36)
+	}
 	uiPadding(rightHolder,10)
+	
+	local function MakeBottomDragPad(main: GuiObject, screenGui: ScreenGui)
+		local shield = Instance.new("TextButton")
+		shield.Name, shield.Text, shield.Modal = "DragShield","",true
+		shield.Visible = false; shield.AutoButtonColor = false
+		shield.BackgroundTransparency = 1; shield.BorderSizePixel = 0
+		shield.ZIndex = 10000; shield.Size = UDim2.fromScale(1,1); shield.Parent = screenGui
+
+		local pad = Instance.new("TextButton")
+		pad.Name = "BottomDragPad"
+		pad.Text = ""
+		pad.AutoButtonColor = false
+		pad.BackgroundTransparency = 1
+		pad.BorderSizePixel = 0
+		pad.Selectable = false
+		pad.Active = true
+		pad.ZIndex = (main.ZIndex or 1) + 2
+		pad.Parent = main
+		pad.AnchorPoint = Vector2.new(0.5, 0)
+		pad.Size       = UDim2.new(0, 100, 0, 24)
+		pad.Position   = UDim2.new(0.5, 0, 1, 8) 
+
+		local handle = Instance.new("Frame")
+		handle.Name = "Handle"
+		handle.AnchorPoint = Vector2.new(0.5, 0)
+		handle.Size = UDim2.new(0, 56, 0, 8)
+		handle.Position = UDim2.new(0.5, 0, 0, 8) 
+		handle.BackgroundColor3 = Color3.fromRGB(255,255,255)
+		handle.BackgroundTransparency = 0.88
+		handle.ZIndex = pad.ZIndex + 1
+		handle.Parent = pad
+		local hc = Instance.new("UICorner"); hc.CornerRadius = UDim.new(0, 4); hc.Parent = handle
+		local hs = Instance.new("UIStroke"); hs.Thickness = 1; hs.Transparency = 0.45; hs.Parent = handle
+		for i=1,4 do
+			local dot = Instance.new("Frame")
+			dot.Size = UDim2.new(0,4,0,4); dot.Position = UDim2.new(0,8+(i-1)*12,1,-6)
+			dot.BackgroundColor3 = Color3.fromRGB(255,255,255); dot.BackgroundTransparency = 0.2
+			dot.ZIndex = handle.ZIndex + 1; dot.Parent = handle
+			local dc = Instance.new("UICorner"); dc.CornerRadius = UDim.new(1,0); dc.Parent = dot
+		end
+
+		-- hover
+		local tIn, tOut = TweenInfo.new(0.12, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+		TweenInfo.new(0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+		pad.MouseEnter:Connect(function()
+			TweenService:Create(handle, tIn, {BackgroundTransparency=0.75}):Play()
+			TweenService:Create(hs, tIn, {Transparency=0.25}):Play()
+		end)
+		pad.MouseLeave:Connect(function()
+			TweenService:Create(handle, tOut, {BackgroundTransparency=0.88}):Play()
+			TweenService:Create(hs, tOut, {Transparency=0.45}):Play()
+		end)
+
+		-- shield ระหว่างลาก
+		local dragging=false
+		pad.MouseButton1Down:Connect(function() dragging=true; shield.Visible=true end)
+		UserInputService.InputEnded:Connect(function(inp)
+			if inp.UserInputType==Enum.UserInputType.MouseButton1 and dragging then dragging=false; shield.Visible=false end
+		end)
+
+		return pad, shield
+	end
+
+	local bottomPad, bottomShield = MakeBottomDragPad(main, sg)
+	main.ClipsDescendants = false
 
 	local tabsContent = Instance.new("Folder"); tabsContent.Name="TabsContent"; tabsContent.Parent = rightHolder
 
-	local dragging=false; local dragStart; local startPos
-	titleBar.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			dragging=true; dragStart=input.Position; startPos=main.Position
-			input.Changed:Connect(function()
-				if input.UserInputState==Enum.UserInputState.End then dragging=false end
-			end)
-		end
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
-			local delta = input.Position - dragStart
-			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-		end
-	end)
+	local OPTIONS = {
+		speed = 22, inertia = true, inertiaTime = 0.22, inertiaFriction = 0.90,
+		clampToParent = true, snap = nil
+	}
 
-	closeBtn.MouseButton1Click:Connect(function()
-		main.Visible=false
-	end)
+	local function SmoothDrag(mainObj: GuiObject, dragArea: GuiObject, opt)
+		opt = opt or {}
+		for k,v in pairs(OPTIONS) do if opt[k]==nil then opt[k]=v end end
+
+		local dragging=false
+		local activeInput: InputObject? = nil
+		local dragStart = Vector2.zero
+		local startPos = mainObj.Position
+		local startOffset = Vector2.new(startPos.X.Offset, startPos.Y.Offset)
+		local currentOffset = startOffset
+		local targetOffset = currentOffset
+		local lastCursor: Vector2? = nil
+		local cursorVel = Vector2.zero
+		local lastT = os.clock()
+
+		local conns = {}
+
+		local function lerpExp(a: Vector2, b: Vector2, speed: number, dt: number)
+			local alpha = 1 - math.exp(-speed * dt)
+			return a + (b - a) * alpha
+		end
+
+		local function snapVec(v: Vector2, grid: Vector2)
+			return Vector2.new(
+				math.floor((v.X + 0.5*grid.X)/grid.X) * grid.X,
+				math.floor((v.Y + 0.5*grid.Y)/grid.Y) * grid.Y
+			)
+		end
+
+		local function clampOffsets(off: Vector2)
+			if not opt.clampToParent then return off end
+			local parent = mainObj.Parent :: GuiObject
+			if not parent then return off end
+			local pSize = parent.AbsoluteSize
+			local mSize = mainObj.AbsoluteSize
+			local a = mainObj.AnchorPoint
+			local scaleX = startPos.X.Scale * pSize.X
+			local scaleY = startPos.Y.Scale * pSize.Y
+			local minX =  (a.X * mSize.X) - scaleX
+			local maxX =  (pSize.X - mSize.X) + (a.X * mSize.X) - scaleX
+			local minY =  (a.Y * mSize.Y) - scaleY
+			local maxY =  (pSize.Y - mSize.Y) + (a.Y * mSize.Y) - scaleY
+			return Vector2.new(math.clamp(off.X,minX,maxX), math.clamp(off.Y,minY,maxY))
+		end
+
+		local function apply(off: Vector2)
+			mainObj.Position = UDim2.new(startPos.X.Scale, off.X, startPos.Y.Scale, off.Y)
+		end
+
+		conns.step = RunService.Heartbeat:Connect(function(dt)
+			currentOffset = lerpExp(currentOffset, targetOffset, opt.speed, dt)
+			if not dragging and opt.inertia and cursorVel.Magnitude>0.01 then
+				targetOffset += cursorVel * dt
+				cursorVel *= opt.inertiaFriction
+			end
+			apply(currentOffset)
+		end)
+
+		conns.began = dragArea.InputBegan:Connect(function(input: InputObject)
+			if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+				dragging=true; activeInput=input; dragStart=input.Position
+				startPos = mainObj.Position
+				startOffset = Vector2.new(startPos.X.Offset, startPos.Y.Offset)
+				currentOffset = startOffset; targetOffset = startOffset
+				lastCursor = input.Position; cursorVel = Vector2.zero
+
+				conns.tempEnded = input.Changed:Connect(function()
+					if input.UserInputState==Enum.UserInputState.End then
+						dragging=false; activeInput=nil
+						if opt.snap then targetOffset = snapVec(targetOffset, opt.snap) end
+						if opt.inertia then targetOffset = currentOffset + cursorVel * opt.inertiaTime end
+						if conns.tempEnded then conns.tempEnded:Disconnect(); conns.tempEnded=nil end
+					end
+				end)
+			end
+		end)
+
+		conns.changed = UserInputService.InputChanged:Connect(function(input: InputObject)
+			if not dragging then return end
+
+			-- อนุญาตเมาส์เสมอ; ทัชต้องเป็นนิ้วเดียวกับที่เริ่ม
+			if input.UserInputType == Enum.UserInputType.MouseMovement then
+				-- ok
+			elseif input.UserInputType == Enum.UserInputType.Touch then
+				if input ~= activeInput then return end
+			else
+				return
+			end
+
+			local now = os.clock()
+			local dt = math.max(1/240, now - lastT)
+			lastT = now
+
+			local delta = input.Position - dragStart
+			local rawTarget = startOffset + Vector2.new(delta.X, delta.Y)
+			rawTarget = clampOffsets(rawTarget)
+			targetOffset = rawTarget
+
+			if lastCursor then
+				local d = input.Position - lastCursor
+				cursorVel = Vector2.new(d.X/dt, d.Y/dt)
+			end
+			lastCursor = input.Position
+		end)
+
+		conns.ended = UserInputService.InputEnded:Connect(function(input: InputObject)
+			if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+				dragging=false; activeInput=nil
+			end
+		end)
+
+		return function()
+			for _,c in pairs(conns) do if typeof(c)=="RBXScriptConnection" then c:Disconnect() end end
+		end
+	end
+
+	local dragCleanup = SmoothDrag(main, bottomPad, OPTIONS)
+
+	-- === Window object ===
+	local winConns = {} -- เก็บ connections เพื่อ Destroy แล้วเคลียร์
+	local function bind(conn) table.insert(winConns, conn); return conn end
 
 	local win = setmetatable({
 		_rt = rt,
@@ -555,28 +799,47 @@ function OrionX.MakeWindow(opts)
 		_tabsFolder = tabsContent,
 		_tabsList = tabsList,
 		_tabsLeft = leftTabs,
+		_rightHolder = rightHolder,
 		_state = newState(),
 		_theme = theme,
 		_visible = true,
+		_dragCleanup = dragCleanup,
 	}, Window)
+
+	-- ปุ่มปิด: ซ่อนแบบเร็ว ไม่ทำลาย
+	bind(closeBtn.MouseButton1Click:Connect(function()
+		main.Visible = false
+	end))
 
 	function win:SetTheme(t)
 		expectType("theme", t, "table")
 		validateTheme(t)
-		deepMerge(self._rt.theme, t)
-		-- basic repaint
-		main.BackgroundColor3=self._rt.theme.Background
-		titleBar.BackgroundColor3=self._rt.theme.Foreground
-		closeBtn.BackgroundColor3=self._rt.theme.Button
-		leftTabs.BackgroundColor3=self._rt.theme.Foreground
-		rightHolder.BackgroundColor3=self._rt.theme.Background
-		title.TextColor3=self._rt.theme.Text
+		-- แก้: resolve กับ input แล้ว merge
+		local incoming = resolveTheme(t)
+		deepMerge(self._rt.theme, incoming)
+		-- repaint หลัก
+		local th = self._rt.theme
+		main.BackgroundColor3 = th.Background
+		titleBar.BackgroundColor3 = th.Foreground
+		closeBtn.BackgroundColor3 = th.Button
+		leftTabs.BackgroundColor3 = th.Foreground
+		self._rightHolder.BackgroundColor3 = th.Background
+		title.TextColor3 = th.Text
 	end
 
 	function win:SetToggleKey(keyCode)
 		expectType("keyCode", keyCode, "EnumItem")
 		self._rt.toggleKey = keyCode
 	end
+
+	-- Toggle global
+	rt.toggleKey = rt.toggleKey or Enum.KeyCode.RightControl
+	bind(UserInputService.InputBegan:Connect(function(inp, gpe)
+		if gpe then return end
+		if inp.KeyCode == rt.toggleKey then
+			main.Visible = not main.Visible
+		end
+	end))
 
 	function win:AddTab(optsTab)
 		optsTab = optsTab or {}
@@ -591,7 +854,10 @@ function OrionX.MakeWindow(opts)
 		tbtn.Parent = leftTabs
 		uiCorner(tbtn,6); uiStroke(tbtn, theme.Stroke, 1)
 
-		local page = createFrame{Parent=tabsContent, Name=optsTab.Name or "Tab", Color=theme.Background, Size=UDim2.new(1, -10, 1, -10), Position=UDim2.new(0,5,0,5)}
+		local page = createFrame{
+			Parent=tabsContent, Name=optsTab.Name or "Tab", Color=theme.Background,
+			Size=UDim2.new(1, -10, 1, -10), Position=UDim2.new(0,5,0,5)
+		}
 		local scroll = Instance.new("ScrollingFrame")
 		scroll.Size = UDim2.new(1,0,1,0)
 		scroll.CanvasSize=UDim2.new(0,0,0,0)
@@ -602,10 +868,10 @@ function OrionX.MakeWindow(opts)
 
 		for _,child in ipairs(tabsContent:GetChildren()) do child.Visible=false end
 		page.Visible=true
-		tbtn.MouseButton1Click:Connect(function()
+		bind(tbtn.MouseButton1Click:Connect(function()
 			for _,child in ipairs(tabsContent:GetChildren()) do child.Visible=false end
 			page.Visible=true
-		end)
+		end))
 
 		local tab = setmetatable({
 			_win = win,
@@ -617,31 +883,41 @@ function OrionX.MakeWindow(opts)
 		function tab:AddSection(optsSec)
 			optsSec = optsSec or {}
 			local sec = createFrame{Parent=scroll, Name=optsSec.Name or "Section", Color=theme.Foreground, Size=UDim2.new(1, -6, 0, 10)}
-			uiCorner(sec,8); uiStroke(sec, theme.Stroke, 1); uiPadding(sec,8); local l = uiList(sec,6)
+			uiCorner(sec,8); uiStroke(sec, theme.Stroke, 1); uiPadding(sec,8)
+			local secLayout = uiList(sec,6)
+
 			local titleLbl
 			if optsSec.Name then
 				titleLbl = createText{Parent=sec, Text=optsSec.Name, TextSize=14, Color=theme.TextDim}
 			end
-			local body = Instance.new("Frame"); body.BackgroundTransparency=1; body.Size=UDim2.new(1,0,0,0); body.Parent=sec
-			local bl = uiList(body,6)
+
+			local body = Instance.new("Frame"); body.BackgroundTransparency = 1
+			body.Size = UDim2.new(1,0,0,0); body.Parent = sec
+			local bodyLayout = uiList(body,6)
 
 			local section = setmetatable({
 				_tab = tab,
 				_sec = sec,
 				_body = body,
-				_list = bl,
+				_list = bodyLayout,
 				_pool = newItemPool(function()
-					local f = Instance.new("Frame"); f.BackgroundTransparency=1; f.Size=UDim2.new(1,0,0,28); f.Visible=true; f.Parent=body; return f
+					local f = Instance.new("Frame")
+					f.BackgroundTransparency = 1
+					f.Size = UDim2.new(1,0,0,28)
+					f.Visible = true
+					f.Parent = body
+					return f
 				end)
 			}, Section)
 
-			-- Auto-resize
 			local function resize()
-				sec.Size = UDim2.new(1, -6, 0, math.max(40, body.UIListLayout.AbsoluteContentSize.Y + (titleLbl and 28 or 14)))
+				local bodyH = bodyLayout.AbsoluteContentSize.Y
+				sec.Size = UDim2.new(1, -6, 0, math.max(40, bodyH + (titleLbl and 28 or 14)))
 				scroll.CanvasSize = UDim2.new(0,0,0, tab._list.AbsoluteContentSize.Y + 20)
 			end
-			sec.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(resize)
-			body.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(resize)
+
+			bind(secLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(resize))
+			bind(bodyLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(resize))
 			resize()
 
 			return section
@@ -654,43 +930,46 @@ function OrionX.MakeWindow(opts)
 		optsN = optsN or {}
 		local duration = tonumber(optsN.Time) or 3
 		local msg = tostring(optsN.Content or optsN.Message or "Notification")
-		local panel = createFrame{Parent=self._rt.screenGui or ensureScreenGui(self._rt), Name="Notify", Color=self._rt.theme.NotificationBg, Size=UDim2.new(0, 280, 0, 60), Position=UDim2.new(1, -300, 0, 20)}
-		uiCorner(panel, 8); uiStroke(panel, self._rt.theme.Stroke, 1)
-		local t = createText{Parent=panel, Text=msg, TextSize=14, Color=self._rt.theme.Text, Size=UDim2.new(1,-12,1,-12), Position=UDim2.new(0,6,0,6)}
-		panel.BackgroundTransparency=0.1
-		TweenService:Create(panel, TweenInfo.new(0.15), {Position=UDim2.new(1, -300, 0, 20), BackgroundTransparency=0}):Play()
+		local th = self._rt.theme
+		local panel = createFrame{
+			Parent=self._rt.screenGui or ensureScreenGui(self._rt), Name="Notify", Color=th.NotificationBg,
+			Size=UDim2.new(0, 300, 0, 64), Position=UDim2.new(1, 24, 0, 24)
+		}
+		uiCorner(panel, 10); uiStroke(panel, th.Stroke, 1); panel.BackgroundTransparency=0.1; panel.ZIndex = 120
+		local t = createText{Parent=panel, Text=msg, TextSize=14, Color=th.Text, Size=UDim2.new(1,-16,1,-16), Position=UDim2.new(0,8,0,8)}; t.ZIndex=121
+		Anim.tween(panel, {Position=UDim2.new(1,-316,0,24)}, Anim.info.base)
 		task.delay(duration, function()
 			if panel and panel.Parent then
-				TweenService:Create(panel, TweenInfo.new(0.2), {BackgroundTransparency=1}):Play()
-				task.delay(0.25, function() if panel then panel:Destroy() end end)
+				Anim.tween(panel, {Position=UDim2.new(1, 24, 0, 24), BackgroundTransparency=1}, Anim.info.base).Completed:Connect(function()
+					if panel then panel:Destroy() end
+				end)
 			end
 		end)
 	end
 
 	function win:Destroy()
-		-- disconnect render handlers owned by this window
+		-- render handlers ของหน้าต่างนี้
 		for id,_ in pairs(self._rt.renderHandlers) do
 			if tostring(id):find(tostring(self)) then
 				self._rt.renderHandlers[id]=nil
 			end
 		end
+		-- cleanup drag และ connections ทั้งหมด
+		if self._dragCleanup then pcall(self._dragCleanup) end
+		for _,c in ipairs(winConns) do if typeof(c)=="RBXScriptConnection" then c:Disconnect() end end
+
 		if self._root then self._root:Destroy() end
-		table.clear(self._state.idMap)
-		table.clear(self._state.values)
+		if self._state then
+			table.clear(self._state.idMap)
+			table.clear(self._state.values)
+		end
 		stopRenderLoop(self._rt)
 	end
-
-	-- global visibility toggle
-	UserInputService.InputBegan:Connect(function(inp, gpe)
-		if gpe then return end
-		if inp.KeyCode == rt.toggleKey then
-			main.Visible = not main.Visible
-		end
-	end)
 
 	table.insert(rt.windows, win)
 	return win
 end
+
 
 -- ======== Section controls ========
 function Section:_addBaseRow(height)
@@ -743,21 +1022,62 @@ function Section:AddButton(opts)
 	local cb = opts.Callback
 	local row, label = self:_addBaseRow(32)
 	label.Text = text
-	local btn = Instance.new("TextButton"); btn.AutoButtonColor=false; btn.Text="Run"; btn.Font=Enum.Font.GothamBold; btn.TextSize=14
+
+	local btn = Instance.new("TextButton")
+	btn.AutoButtonColor=false; btn.Text="Run"; btn.Font=Enum.Font.GothamBold; btn.TextSize=14
 	btn.BackgroundColor3=self._tab._win._rt.theme.Button; btn.TextColor3=self._tab._win._rt.theme.Text
 	btn.Size=UDim2.new(0,80,0,24); btn.Position=UDim2.new(1,-88,0.5,-12); btn.Parent=row
 	uiCorner(btn,6); uiStroke(btn, self._tab._win._rt.theme.Stroke,1)
+
+	-- hover
+	local base = self._tab._win._rt.theme.Button
+	local hov  = self._tab._win._rt.theme.ButtonHover or base:lerp(Color3.new(1,1,1), 0.06)
+	local onHover = hoverColor(btn, base, hov)
+	btn.MouseEnter:Connect(function() onHover(true) end)
+	btn.MouseLeave:Connect(function() onHover(false) end)
+
+	-- ripple (เฟรมวงกลมขยาย)
+	local rippleHolder = Instance.new("Frame")
+	rippleHolder.BackgroundTransparency = 1
+	rippleHolder.Size = UDim2.fromScale(1,1)
+	rippleHolder.ClipsDescendants = true
+	rippleHolder.ZIndex = btn.ZIndex + 1
+	rippleHolder.Parent = btn
+
+	local function ripple(mx, my)
+		local ap = btn.AbsolutePosition
+		local as = btn.AbsoluteSize
+		local m = UserInputService:GetMouseLocation()
+		local x = (mx ~= nil) and (mx - ap.X) or (m.X - ap.X)
+		local y = (my ~= nil) and (my - ap.Y) or (m.Y - ap.Y)
+		x = math.clamp(x, 0, as.X)
+		y = math.clamp(y, 0, as.Y)
+
+		local c = Instance.new("Frame")
+		c.BackgroundColor3 = self._tab._win._rt.theme.Accent
+		c.BackgroundTransparency = 0.4
+		c.Size = UDim2.fromOffset(0,0)
+		c.AnchorPoint = Vector2.new(0.5,0.5)
+		c.Position = UDim2.fromOffset(x, y)
+		c.ZIndex = rippleHolder.ZIndex + 1
+		c.Parent = rippleHolder
+		uiCorner(c, 999)
+
+		local d = math.max(as.X, as.Y) * 1.6
+		Anim.tween(c, {Size = UDim2.fromOffset(d,d), BackgroundTransparency = 1}, Anim.info.slow)
+			.Completed:Connect(function() if c then c:Destroy() end end)
+	end
+
 	local _busy=false
 	btn.MouseButton1Click:Connect(function()
-		if _busy then return end; _busy=true
-		if type(cb)=="function" then safe_pcall(cb) end
-		task.delay(0, function() _busy=false end)
+		if _busy then return end; _busy = true
+		pressPulse(btn)
+		ripple() -- ไม่ต้องส่งพิกัด
+		if type(cb) == "function" then safe_pcall(cb) end
+		task.delay(0, function() _busy = false end)
 	end)
-	return {
-		Object=row,
-		Set=function(_, name) label.Text=tostring(name) end,
-		Destroy=function() row:Destroy() end
-	}
+
+	return { Object=row, Set=function(_, name) label.Text=tostring(name) end, Destroy=function() row:Destroy() end }
 end
 
 function Section:AddToggle(opts)
@@ -765,34 +1085,31 @@ function Section:AddToggle(opts)
 	local text = tostring(opts.Name or "Toggle")
 	local def = opts.Default == true
 	local cb = opts.Callback
-	local row, label = self:_addBaseRow(32)
-	label.Text = text
-	local box = Instance.new("Frame"); box.Size=UDim2.new(0,36,0,20); box.Position=UDim2.new(1,-48,0.5,-10)
-	box.BackgroundColor3 = def and self._tab._win._rt.theme.ToggleOn or self._tab._win._rt.theme.ToggleOff
-	box.Parent=row; uiCorner(box,10); uiStroke(box, self._tab._win._rt.theme.Stroke,1)
-	local knob = createFrame{Parent=box, Color=self._tab._win._rt.theme.Foreground, Size=UDim2.new(0,16,0,16), Position=UDim2.new(0,2,0,2)}; uiCorner(knob,8)
-	if def then knob.Position=UDim2.new(1,-18,0,2) end
+
+	local row, label = self:_addBaseRow(32); label.Text = text
+	local th = self._tab._win._rt.theme
+
+	local box = Instance.new("Frame")
+	box.Size=UDim2.new(0,42,0,22); box.Position=UDim2.new(1,-54,0.5,-11)
+	box.BackgroundColor3 = def and th.ToggleOn or th.ToggleOff
+	box.Parent=row; uiCorner(box,11); uiStroke(box, th.Stroke,1)
+
+	local knob = createFrame{Parent=box, Color=th.Foreground, Size=UDim2.new(0,18,0,18), Position=UDim2.new(def and 1 or 0, def and -20 or 2, 0, 2)}; uiCorner(knob,9)
+	local glow = Instance.new("UIStroke"); glow.Thickness=2; glow.Color = th.Accent; glow.Transparency = 1; glow.Parent = knob
+
 	local value = def
-	local _busy=false
 	local function apply(v)
 		value=v
-		TweenService:Create(knob, TweenInfo.new(0.1), {Position=v and UDim2.new(1,-18,0,2) or UDim2.new(0,2,0,2)}):Play()
-		TweenService:Create(box, TweenInfo.new(0.1), {BackgroundColor3=v and self._tab._win._rt.theme.ToggleOn or self._tab._win._rt.theme.ToggleOff}):Play()
+		Anim.tween(box, {BackgroundColor3 = v and th.ToggleOn or th.ToggleOff}, Anim.info.base)
+		Anim.tween(knob, {Position = v and UDim2.new(1,-20,0,2) or UDim2.new(0,2,0,2)}, Anim.info.base)
+		Anim.tween(glow, {Transparency = v and 0.5 or 1}, Anim.info.fast)
 	end
 	box.InputBegan:Connect(function(inp)
 		if inp.UserInputType==Enum.UserInputType.MouseButton1 then
-			if _busy then return end; _busy=true
-			apply(not value)
-			if type(cb)=="function" then safe_pcall(cb, value) end
-			task.delay(0, function() _busy=false end)
+			pressPulse(box); apply(not value); if type(cb)=="function" then safe_pcall(cb, value) end
 		end
 	end)
-	return {
-		Object=row,
-		Get=function() return value end,
-		Set=function(_, v) apply(v==true) end,
-		Destroy=function() row:Destroy() end
-	}
+	return { Object=row, Get=function() return value end, Set=function(_, v) apply(v==true) end, Destroy=function() row:Destroy() end }
 end
 
 function Section:AddSlider(opts)
@@ -890,6 +1207,154 @@ function Section:AddDropdown(opts)
 	}
 end
 
+
+function Section:AddDropdown(opts)
+	opts = opts or {}
+	local text = tostring(opts.Name or "Dropdown")
+	local list = opts.Options or opts.List or {}
+	local def = opts.Default
+	local cb = opts.Callback
+
+	local row, label = self:_addBaseRow(32)
+	label.Text = text
+
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0,180,0,24)
+	btn.Position = UDim2.new(1,-188,0.5,-12)
+	btn.Text = def and tostring(def) or "Select"
+	btn.Font = Enum.Font.Gotham
+	btn.TextSize = 14
+	btn.AutoButtonColor = false
+	btn.BackgroundColor3 = self._tab._win._rt.theme.Dropdown
+	btn.TextColor3 = self._tab._win._rt.theme.Text
+	btn.Parent = row
+	uiCorner(btn,6); uiStroke(btn, self._tab._win._rt.theme.Stroke,1)
+
+	-- overlay list (parent = ScreenGui) เพื่อไม่ถูก clip
+	local overlay = self._tab._win._rt.screenGui or ensureScreenGui(self._tab._win._rt)
+	local listFrame = Instance.new("Frame")
+	listFrame.Name = "DropdownOverlay"
+	listFrame.Visible = false
+	listFrame.BackgroundColor3 = self._tab._win._rt.theme.Dropdown
+	listFrame.BorderSizePixel = 0
+	listFrame.ClipsDescendants = true
+	listFrame.ZIndex = 100
+	listFrame.Parent = overlay
+	uiCorner(listFrame,6); uiStroke(listFrame, self._tab._win._rt.theme.Stroke,1)
+	
+	fadeIn(listFrame)
+	
+	local sf = Instance.new("ScrollingFrame")
+	sf.Size = UDim2.new(1,0,1,0)
+	sf.CanvasSize = UDim2.new(0,0,0,0)
+	sf.ScrollBarThickness = 6
+	sf.BackgroundTransparency = 1
+	sf.ZIndex = 101
+	sf.Parent = listFrame
+	local lay = uiList(sf,4); uiPadding(sf,6)
+
+	local function setZ(i)
+		i.ZIndex = 102
+		for _,d in ipairs(i:GetDescendants()) do
+			if d:IsA("GuiObject") then d.ZIndex = 102 end
+		end
+	end
+
+	local pool = newItemPool(function()
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1,-4,0,24)
+		b.AutoButtonColor = false
+		b.BackgroundColor3 = self._tab._win._rt.theme.DropdownItem
+		b.TextColor3 = self._tab._win._rt.theme.Text
+		b.Font = Enum.Font.Gotham
+		b.TextSize = 14
+		b.Parent = sf
+		uiCorner(b,4); uiStroke(b, self._tab._win._rt.theme.Stroke,1)
+		setZ(b)
+		return b
+	end)
+
+	local value = def
+	local outsideCon
+
+	local function placeList(count)
+		local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+		local sg = overlay.AbsoluteSize
+		local w = 180
+		local h = math.min((count * 28) + 12, 180)
+		local x = math.clamp(ap.X, 0, sg.X - w - 4)
+		local yBelow = ap.Y + as.Y + 4
+		local yAbove = ap.Y - h - 4
+		local y = (yBelow + h <= sg.Y) and yBelow or math.max(0, yAbove)
+		listFrame.Position = UDim2.fromOffset(x, y)
+		listFrame.Size = UDim2.fromOffset(w, h)
+		sf.CanvasSize = UDim2.new(0,0,0, (count * 28) + 12)
+	end
+
+	local function setOptions(items)
+		pool:releaseAll()
+		for _,name in ipairs(items) do
+			local b = pool:acquire()
+			b.Visible = true
+			b.Text = tostring(name)
+			b.MouseButton1Click:Connect(function()
+				value = name
+				btn.Text = tostring(name)
+				listFrame.Visible = false
+				if outsideCon then outsideCon:Disconnect(); outsideCon=nil end
+				if type(cb)=="function" then safe_pcall(cb, name) end
+			end)
+		end
+		placeList(#items)
+	end
+	setOptions(list)
+
+	local function openList()
+		placeList(#list)
+		listFrame.Visible = true
+		if outsideCon then outsideCon:Disconnect(); outsideCon=nil end
+		outsideCon = UserInputService.InputBegan:Connect(function(inp,gpe)
+			if gpe then return end
+			if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.KeyCode == Enum.KeyCode.Escape then
+				local m = UserInputService:GetMouseLocation()
+				local p, s = listFrame.AbsolutePosition, listFrame.AbsoluteSize
+				local inside = m.X>=p.X and m.X<=p.X+s.X and m.Y>=p.Y and m.Y<=p.Y+s.Y
+				if not inside then
+					listFrame.Visible=false
+					outsideCon:Disconnect(); outsideCon=nil
+				end
+			end
+		end)
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		if listFrame.Visible then
+			listFrame.Visible=false
+			if outsideCon then outsideCon:Disconnect(); outsideCon=nil end
+		else
+			openList()
+		end
+	end)
+
+	-- อัปเดตตำแหน่งตามการขยับหน้าต่าง
+	RunService.RenderStepped:Connect(function()
+		if listFrame.Visible then placeList(#list) end
+	end)
+
+	return {
+		Object = row,
+		Get = function() return value end,
+		Set = function(_, v) value=v; btn.Text=tostring(v) end,
+		Refresh = function(_, items) list = items or {}; setOptions(list) end,
+		Destroy = function()
+			if outsideCon then outsideCon:Disconnect(); outsideCon=nil end
+			if listFrame then listFrame:Destroy() end
+			row:Destroy()
+		end
+	}
+end
+
+
 function Section:AddTextbox(opts)
 	opts = opts or {}
 	local text = tostring(opts.Name or "Textbox")
@@ -914,40 +1379,64 @@ end
 function Section:AddBind(opts)
 	opts = opts or {}
 	local text = tostring(opts.Name or "Bind")
-	local def = opts.Default or Enum.KeyCode.None
+	local def = opts.Default
+	if typeofx(def) ~= "EnumItem" then def = nil end
 	local cb = opts.Callback
+
 	local row, label = self:_addBaseRow(32); label.Text = text
-	local btn = Instance.new("TextButton"); btn.AutoButtonColor=false; btn.Text=(def ~= Enum.KeyCode.None and def.Name or "Set"); btn.Font=Enum.Font.Gotham; btn.TextSize=14
-	btn.BackgroundColor3=self._tab._win._rt.theme.Button; btn.TextColor3=self._tab._win._rt.theme.Text
-	btn.Size=UDim2.new(0,120,0,24); btn.Position=UDim2.new(1,-128,0.5,-12); btn.Parent=row
+	local btn = Instance.new("TextButton")
+	btn.AutoButtonColor = false
+	btn.Text = def and def.Name or "Set"
+	btn.Font = Enum.Font.Gotham
+	btn.TextSize = 14
+	btn.BackgroundColor3 = self._tab._win._rt.theme.Button
+	btn.TextColor3 = self._tab._win._rt.theme.Text
+	btn.Size = UDim2.new(0,120,0,24)
+	btn.Position = UDim2.new(1,-128,0.5,-12)
+	btn.Parent = row
 	uiCorner(btn,6); uiStroke(btn, self._tab._win._rt.theme.Stroke,1)
-	local waiting=false; local key = def
+
+	local waiting = false
+	local key = def
+
 	btn.MouseButton1Click:Connect(function()
-		waiting=true; btn.Text="Press key..."
+		waiting = true
+		btn.Text = "Press key..."
 	end)
+
 	UserInputService.InputBegan:Connect(function(inp, gpe)
-		if waiting and not gpe then
+		if waiting and not gpe and inp.UserInputType == Enum.UserInputType.Keyboard then
 			if inp.KeyCode and inp.KeyCode ~= Enum.KeyCode.Unknown then
-				key = inp.KeyCode; btn.Text = key.Name; waiting=false
+				key = inp.KeyCode
+				btn.Text = key.Name
+				waiting = false
 				if type(cb)=="function" then safe_pcall(cb, key) end
 			end
 		end
 	end)
+
 	return {
-		Object=row,
-		Get=function() return key end,
-		Set=function(_, v) if typeofx(v)=="EnumItem" then key=v; btn.Text=v.Name end end,
-		Destroy=function() row:Destroy() end
+		Object = row,
+		Get = function() return key end,
+		Set = function(_, v)
+			if typeofx(v)=="EnumItem" then
+				key = v; btn.Text = v.Name
+			elseif v == nil then
+				key = nil; btn.Text = "Set"
+			end
+		end,
+		Destroy = function() row:Destroy() end
 	}
 end
+
 
 function Section:AddColorpicker(opts)
 	opts = opts or {}
 	local text = tostring(opts.Name or "Colorpicker")
 	local def = opts.Default or Color3.fromRGB(255,255,255)
 	local cb = opts.Callback
-	local row, label = self:_addBaseRow(44); label.Text = text
-	local preview = createFrame{Parent=row, Color=def, Size=UDim2.new(0,32,0,20), Position=UDim2.new(1,-40,0,12)}; uiCorner(preview,4); uiStroke(preview, self._tab._win._rt.theme.Stroke,1)
+	local row, label = self:_addBaseRow(76) 
+	local preview = createFrame{Parent=row, Color=def, Size=UDim2.new(0,32,0,20), Position=UDim2.new(1,-40,0,28)}
 
 	-- Simple RGB sliders as a reliable cross-executor picker
 	local function makeSlider(offY, labelText, init, onChange)
@@ -979,9 +1468,9 @@ function Section:AddColorpicker(opts)
 		preview.BackgroundColor3 = c
 		if type(cb)=="function" then safe_pcall(cb, c) end
 	end
-	local rs = makeSlider(2,"R", r, function(v) r=v; apply() end)
-	local gs = makeSlider(20,"G", g, function(v) g=v; apply() end)
-	local bs = makeSlider(38,"B", b, function(v) b=v; apply() end)
+	local rs = makeSlider(6,"R", r, function(v) r=v; apply() end)
+	local gs = makeSlider(26,"G", g, function(v) g=v; apply() end)
+	local bs = makeSlider(46,"B", b, function(v) b=v; apply() end)
 
 	return {
 		Object=row,
@@ -1021,27 +1510,41 @@ function OrionX.Load(profile)
 	return true
 end
 
--- ======== Build Info and self-checks ========
+-- ======== Build Info (Luau/Studio-safe) ========
 function OrionX.BuildInfo()
-	local info = debug.getinfo(1,'S')
-	local source = info and info.source or ""
-	local path = source:match("^@(.+)$")
-	local size, hash = nil, nil
-	if path and typeofx(readfile)=="function" then
-		local ok, data = pcall(readfile, path)
-		if ok and data then
-			size = #data
-			hash = sha256(data)
+	local path, size, hash
+
+	-- ใช้ debug.info ถ้ามี
+	if debug and typeof(debug.info)=="function" then
+		local ok, src = pcall(function() return debug.info(2, "s") end)
+		if not ok or type(src)~="string" then
+			ok, src = pcall(function() return debug.info(1, "s") end)
+		end
+		if ok and type(src)=="string" then
+			path = src:match("^@(.+)$")
 		end
 	end
+
+	-- คำนวณขนาดและ SHA-256 เมื่อมี I/O และมีตัว sha256
+	if path and typeof(readfile)=="function" then
+		local ok, data = pcall(readfile, path)
+		if ok and type(data)=="string" then
+			size = #data
+			if type(sha256)=="function" then
+				hash = sha256(data)
+			end
+		end
+	end
+
 	return {
 		version = OrionX._VERSION,
-		build = OrionX._BUILD_DATE,
-		file = path,
-		size = size,
-		sha256 = hash
+		build   = OrionX._BUILD_DATE,
+		file    = path,
+		size    = size,     -- จะเป็น nil ใน Studio เพราะไม่มี readfile
+		sha256  = hash      -- จะเป็น nil ถ้าไม่มี sha256 หรือ I/O
 	}
 end
+
 
 -- ======== Example usage string ========
 function OrionX.Example()
@@ -1140,7 +1643,13 @@ function OrionX.test_smoke()
 		if tb.Get then assert(type(tb:Get())=="string") end
 		if kb.Get then assert(typeof(kb:Get())=="EnumItem") end
 		if cp.Get then assert(typeof(cp:Get())=="Color3") end
-		OrionX.SetTheme({Accent=Color3.fromRGB(1,2,3)})
+		function OrionX.SetTheme(t)
+			expectType("theme", t, "table")
+			validateTheme(t)
+			local rt = Core:GetRuntime()
+			rt.theme = resolveTheme(rt.theme)
+			deepMerge(rt.theme, t)
+		end
 		w:SetToggleKey(Enum.KeyCode.RightControl)
 		OrionX.Save("smoke")
 		OrionX.Load("smoke")
