@@ -582,7 +582,19 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 		end)
 	end
 	
-	local blur: BlurEffect? = nil
+	local function getOrCreateBlur()
+		local b = Lighting:FindFirstChild("OX_Blur")
+		if not b then
+			b = Instance.new("BlurEffect")
+			b.Name = "OX_Blur"
+			b.Enabled = false
+			b.Size = 0
+			b.Parent = Lighting
+		end
+		return b
+	end
+	
+	local blur = (opts.blur > 0) and getOrCreateBlur() or nil
 	if opts.blur > 0 then
 		blur = Instance.new("BlurEffect")
 		blur.Name = "OX_Blur"; blur.Enabled = false; blur.Size = 0; blur.Parent = Lighting
@@ -598,7 +610,12 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 	function api:Show()
 		stop(activeOut)
 		dim.Visible = opts.dim > 0
-		if blur then blur.Enabled = true end
+		if blur then
+			blur.Enabled = true
+			blur.Size = 0
+			TweenService:Create(blur, TweenInfo.new(opts.inDur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+				{Size = opts.blur}):Play()
+		end
 		main.Visible = true
 
 		scale.Scale = opts.pop
@@ -617,6 +634,10 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 
 	function api:Hide(cb)
 		stop(activeIn)
+		if blur then
+			TweenService:Create(blur, TweenInfo.new(opts.outDur, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{Size = 0}):Play()
+		end
 		activeOut = {
 			T(scale, TweenInfo.new(opts.outDur, opts.outEase, Enum.EasingDirection.In), {Scale = opts.pop}),
 			T(main,  TweenInfo.new(opts.outDur, opts.outEase, Enum.EasingDirection.In),
@@ -627,8 +648,15 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 				{Size = 0}) or nil,
 		}
 		task.delay(opts.outDur, function()
-			dim.Visible = false; if blur then blur.Enabled = false end
-			main.Visible = false; main.Position = basePos
+			for _,e in ipairs(Lighting:GetChildren()) do
+				if e:IsA("BlurEffect") and e.Name == "OX_Blur" then
+					e.Size = 0
+					e.Enabled = false
+				end
+			end
+			dim.Visible = false
+			main.Visible = false
+			main.Position = basePos
 			if cb then cb() end
 		end)
 	end
@@ -1079,16 +1107,18 @@ function OrionX.MakeWindow(opts)
 	end
 
 	function win:Destroy()
-		-- render handlers ของหน้าต่างนี้
 		for id,_ in pairs(self._rt.renderHandlers) do
 			if tostring(id):find(tostring(self)) then
 				self._rt.renderHandlers[id]=nil
 			end
 		end
-		-- cleanup drag และ connections ทั้งหมด
 		if self._dragCleanup then pcall(self._dragCleanup) end
 		for _,c in ipairs(winConns) do if typeof(c)=="RBXScriptConnection" then c:Disconnect() end end
-
+		
+		for _,e in ipairs(Lighting:GetChildren()) do
+			if e:IsA("BlurEffect") and e.Name == "OX_Blur" then e:Destroy() end
+		end
+		
 		if self._root then self._root:Destroy() end
 		if self._state then
 			table.clear(self._state.idMap)
