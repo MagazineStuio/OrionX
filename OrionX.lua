@@ -589,7 +589,7 @@ local function AttachWindowMotion(main: GuiObject, screenGui: ScreenGui, opts)
 		blur.Size = 0
 		blur.Enabled = false
 		blur.Name = "OrionXBlur"
-		blur.Parent = Lighting
+		blur.Parent = Lighting	
 	end
 
 	-- Scale without reflow
@@ -633,7 +633,7 @@ local function AttachWindowMotion(main: GuiObject, screenGui: ScreenGui, opts)
 		return true
 	end
 
-	function api:Hide()
+	function api:Hide(cb)
 		stop(playing.inAnims)
 		playing.outAnims = {
 			_t(scale, TweenInfo.new(opts.outDur, opts.outEase, Enum.EasingDirection.In), {Scale = opts.pop}),
@@ -644,12 +644,10 @@ local function AttachWindowMotion(main: GuiObject, screenGui: ScreenGui, opts)
 			(blur and _t(blur, TweenInfo.new(opts.outDur, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
 				{Size = 0})) or nil,
 		}
-		-- ปิดเมื่อจบ
 		task.delay(opts.outDur, function()
-			dim.Visible = false
-			if blur then blur.Enabled = false end
-			main.Visible = false
-			main.Position = basePos
+			dim.Visible = false; if blur then blur.Enabled = false end
+			main.Visible = false; main.Position = basePos
+			if cb then cb() end
 		end)
 		return true
 	end
@@ -716,7 +714,29 @@ function OrionX.MakeWindow(opts)
 	closeBtn.Parent=titleBar
 	uiCorner(closeBtn,6); uiStroke(closeBtn, theme.Stroke, 1)
 	
-	closeBtn.MouseButton1Click:Connect(function() motion:Hide() end)
+	local closing = false
+
+	local function closeWindow(permanent)
+		if closing then return end
+		closing = true
+		if motion and motion.Hide then
+			motion:Hide(function()
+				if permanent and win and win.Destroy then win:Destroy() end
+				closing = false
+			end)
+		else
+			main.Visible = false
+			if permanent and win and win.Destroy then win:Destroy() end
+			closing = false
+		end
+	end
+
+	closeBtn.MouseButton1Click:Connect(function() closeWindow(false) end)
+
+	UserInputService.InputBegan:Connect(function(inp, gpe)
+		if gpe then return end
+		if inp.KeyCode == Enum.KeyCode.Escape then closeWindow(false) end
+	end)
 	
 	local leftTabs = createFrame{
 		Parent=main, Name="Tabs", Color=theme.Foreground,
