@@ -676,7 +676,11 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 		main.Position = basePos
 	end)
 
-	main._motion = api
+	if opts.clickDimToClose then
+		dim.MouseButton1Click:Connect(function()
+			if main.Visible and main.Parent then api:Hide() end
+		end)
+	end
 	return api
 end
 
@@ -700,9 +704,8 @@ function OrionX.MakeWindow(opts)
 	}
 	uiCorner(main, 10); uiStroke(main, theme.StrokeStrong, 1)
 	
-	local motion = AttachWindowMotionPro(main, sg, {
-		inDur=0.24, outDur=0.18, pop=0.94, shiftY=10, dim=0.40, blur=12, clickDimToClose=true
-	})
+	local motion = AttachWindowMotionPro(main, sg, {blur=12, dim=0.4})
+	win._motion = motion
 	motion:Show()
 
 	UserInputService.InputBegan:Connect(function(inp, gpe)
@@ -1126,7 +1129,9 @@ function OrionX.MakeWindow(opts)
 		end
 		stopRenderLoop(self._rt)
 	end
-
+	
+	if win._motion then pcall(win._motion.Destroy, win._motion) end
+	
 	table.insert(rt.windows, win)
 	return win
 end
