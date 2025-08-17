@@ -682,10 +682,7 @@ function OrionX.MakeWindow(opts)
 	}
 	uiCorner(main, 10); uiStroke(main, theme.StrokeStrong, 1)
 	
-	local motion = AttachWindowMotion(main, sg, {
-		inDur=0.22, outDur=0.16, pop=0.96, shiftY=8, dim=0.35, blur=12
-	})
-
+	local motion = AttachWindowMotion(main, sg, {inDur=0.22, outDur=0.16, pop=0.96, shiftY=8, dim=0.35, blur=12})
 	motion:Show()
 
 	UserInputService.InputBegan:Connect(function(inp, gpe)
@@ -713,30 +710,6 @@ function OrionX.MakeWindow(opts)
 	closeBtn.Size=UDim2.new(0,32,0,24); closeBtn.Position=UDim2.new(1,-40,0,6)
 	closeBtn.Parent=titleBar
 	uiCorner(closeBtn,6); uiStroke(closeBtn, theme.Stroke, 1)
-	
-	local closing = false
-
-	local function closeWindow(permanent)
-		if closing then return end
-		closing = true
-		if motion and motion.Hide then
-			motion:Hide(function()
-				if permanent and win and win.Destroy then win:Destroy() end
-				closing = false
-			end)
-		else
-			main.Visible = false
-			if permanent and win and win.Destroy then win:Destroy() end
-			closing = false
-		end
-	end
-
-	closeBtn.MouseButton1Click:Connect(function() closeWindow(false) end)
-
-	UserInputService.InputBegan:Connect(function(inp, gpe)
-		if gpe then return end
-		if inp.KeyCode == Enum.KeyCode.Escape then closeWindow(false) end
-	end)
 	
 	local leftTabs = createFrame{
 		Parent=main, Name="Tabs", Color=theme.Foreground,
@@ -946,22 +919,31 @@ function OrionX.MakeWindow(opts)
 	local function bind(conn) table.insert(winConns, conn); return conn end
 
 	local win = setmetatable({
-		_rt = rt,
-		_root = main,
-		_tabsFolder = tabsContent,
-		_tabsList = tabsList,
-		_tabsLeft = leftTabs,
-		_rightHolder = rightHolder,
-		_state = newState(),
-		_theme = theme,
-		_visible = true,
-		_dragCleanup = dragCleanup,
+		_rt = rt, _root = main, _tabsFolder = tabsContent, _tabsList = tabsList,
+		_tabsLeft = leftTabs, _rightHolder = rightHolder, _state = newState(),
+		_theme = theme, _visible = true, _dragCleanup = dragCleanup, _motion = motion,
+		_closing = false,
 	}, Window)
+	
+	function win:Show()
+		if self._motion then self._motion:Show() else self._root.Visible = true end
+	end
 
-	-- ปุ่มปิด: ซ่อนแบบเร็ว ไม่ทำลาย
-	bind(closeBtn.MouseButton1Click:Connect(function()
-		main.Visible = false
-	end))
+	function win:Hide(cb)
+		if self._motion then self._motion:Hide(cb) else self._root.Visible = false; if cb then cb() end end
+	end
+
+	function win:Close(permanent: boolean?)
+		if self._closing then return end
+		self._closing = true
+		self:Hide(function()
+			if permanent then self:Destroy() end
+			self._closing = false
+		end)
+	end
+	
+	bind(closeBtn.MouseButton1Click:Connect(function() win:Close(false) end))
+
 
 	function win:SetTheme(t)
 		expectType("theme", t, "table")
