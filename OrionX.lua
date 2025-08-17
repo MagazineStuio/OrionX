@@ -563,7 +563,6 @@ local function AttachWindowMotionPro(main: GuiObject, screenGui: ScreenGui, opts
 	opts = opts or {}; for k,v in pairs(DEFAULT) do if opts[k]==nil then opts[k]=v end end
 
 	main.ClipsDescendants = false
-	main.AnchorPoint = Vector2.new(0.5, 0.5)
 	main.Position = UDim2.new(0.5, 0, 0.5, 0)
 	local basePos = main.Position
 
